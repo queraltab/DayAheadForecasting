@@ -22,6 +22,7 @@ def rename_entsoe_cols(path, df):
         df = df.rename(columns={df.columns[1]: "DAMprice"})
     elif "Load" in path:
         df = df.rename(columns={df.columns[1]: "loadForecast", df.columns[2]: "load"})
+        df = df.drop(columns=['load'])
     else:
         print("The given data is neither load neither prices")
         return
@@ -36,12 +37,13 @@ def csv_to_df(path):
     '''
     df = pd.read_csv(path)
     df = rename_entsoe_cols(path, df)
-    df = df.rename(columns={df.columns[0]: "mtu"})
+    df = df.rename(columns={df.columns[0]: 'mtu'})
     df.index = pd.to_datetime([d[:16] for d in df.mtu.values], format='%d.%m.%Y %H:%M')
-    df = df.drop(columns=["mtu"])
+    df = df.drop(columns=['mtu'])
     df.replace('-', np.nan, inplace=True)  # Remove empty values
     df.dropna(inplace=True)
     df = df.astype(np.float64)
+    # df = df.tz_localize("CET", ambiguous='infer')
     return df
 
 
@@ -77,16 +79,36 @@ if __name__ == '__main__':
     ################## UPDATE THE DATABASE WITH THE NEW PRICES AND LOAD
     PATH_update = 'data/buffer'
     paths_new = ["%s/%s" % (PATH_update, file) for file in os.listdir(PATH_update)]
-    df_l_1 = csv_to_sql([x for x in paths_new if "Load" in x], table_load, engine, replace=False)
-    df_p_1 = csv_to_sql([x for x in paths_new if "Prices" in x], table_prices, engine, replace=False)
+    try:
+        df_l_1 = csv_to_sql([x for x in paths_new if "Load" in x], table_load, engine, replace=False)
+        df_l_raw = pd.concat([df_l_0, df_l_1])
+    except ValueError:
+        df_l_raw = df_l_0
 
-    df_l_raw = pd.concat([df_l_0, df_l_1])
-    df_p_raw = pd.concat([df_p_0, df_p_1])
+    try:
+        df_p_1 = csv_to_sql([x for x in paths_new if "Prices" in x], table_prices, engine, replace=False)
+        df_p_raw = pd.concat([df_p_0, df_p_1])
+    except ValueError:
+        df_p_raw = df_p_0
+
+    # # Clip data
     df_p = df_p_raw.clip(lower=df_p_raw.quantile(0.01).values.item(), upper=df_p_raw.quantile(0.99).values.item(),
+                         inplace=False)
+    df_l = df_l_raw.clip(lower=df_l_raw.quantile(0.01).values.item(), upper=df_l_raw.quantile(0.99).values.item(),
                          inplace=False)
     df_p.plot()
     df_p.hist(bins=100)
-    df_l = df_l_raw.clip(lower=df_l_raw.quantile(0.01).values, upper=df_l_raw.quantile(0.99).values,
-                         inplace=False, axis=1)
     df_l.plot()
     df_l.hist(bins=100)
+
+    # Remake index and check for nan
+    new_index = pd.date_range(start='1/1/2017 00:00:00', end='26/8/2020 23:00:00', freq='H', tz='CET')
+    df_p = df_p.tz_localize("CET", ambiguous='infer')
+    # print(df_p.index[df_p.index.duplicated()])
+    df_p.reindex(new_index)
+    df_p.isnull().values.any()
+
+    df_l = df_l.tz_localize("CET", ambiguous='infer')
+    df_l_h = df_l.resample("1h").apply(np.mean)
+    df_l_h.reindex(new_index)
+    df_l_h.isnull().values.any()
